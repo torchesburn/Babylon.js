@@ -1,57 +1,28 @@
 precision highp float;
 
-attribute vec3 position;
-attribute vec3 normal;
-attribute vec2 uv;
+// Vertex attributes
+attribute vec3 position; // The position of the vertex
+attribute vec2 uv; // The UV coordinate of the vertex
 
-uniform mat4 projMatrix;
+// Matrices
+uniform mat4 worldViewProjection; // Combined world-view-projection matrix
+uniform mat4 decalProjection; // Projection matrix for the decal
+uniform mat4 decalTransform; // Transformation matrix for the decal
+uniform mat4 world; // World matrix for the model
 
-varying vec2 vDecalTC;
-varying highp vec2 vUV;
-
-
-#include<bonesDeclaration>
-#include<bakedVertexAnimationDeclaration>
-
-#include<morphTargetsVertexGlobalDeclaration>
-#include<morphTargetsVertexDeclaration>[0..maxSimultaneousMorphTargets]
-
-#include<instancesDeclaration>
-
+// Varying to pass data to the fragment shader
+varying vec2 vUV; // Pass the UV coordinate to the fragment shader
+varying vec3 vDecalPos; // Pass the transformed position for the decal
 
 void main(void) {
-    vec3 positionUpdated = position;
-    vec3 normalUpdated = normal;
-
-    #include<morphTargetsVertexGlobal>
-    #include<morphTargetsVertex>[0..maxSimultaneousMorphTargets]
-
-    #include<instancesVertex>
-    #include<bonesVertex>
-    #include<bakedVertexAnimation>
-
-    vec4 worldPos = finalWorld * vec4(positionUpdated, 1.0);
-
-    mat3 normWorldSM = mat3(finalWorld);
-
-    vec3 vNormalW;
-
-    #if defined(INSTANCES) && defined(THIN_INSTANCES)
-        vNormalW = normalUpdated / vec3(dot(normWorldSM[0], normWorldSM[0]), dot(normWorldSM[1], normWorldSM[1]), dot(normWorldSM[2], normWorldSM[2]));
-        vNormalW = normalize(normWorldSM * vNormalW);
-    #else
-        #ifdef NONUNIFORMSCALING
-            normWorldSM = transposeMat3(inverseMat3(normWorldSM));
-        #endif
-
-        vNormalW = normalize(normWorldSM * normalUpdated);
-    #endif
-
-    vec3 normalView = normalize((projMatrix * vec4(vNormalW, 0.0)).xyz);
-
-    vec3 decalTC = (projMatrix * worldPos).xyz;
-    vDecalTC = decalTC.xy;
     vUV = uv;
 
-    gl_Position = vec4(uv * 2.0 - 1.0, normalView.z > 0.0 ? 2. : decalTC.z, 1.0);
+    // Transform the vertex position to world space
+    vec4 worldPosition = world * vec4(position, 1.0);
+
+    // Apply the decal projection and transformation
+    vDecalPos = (decalTransform * decalProjection * worldPosition).xyz;
+
+    // Compute the final position of the vertex in clip space
+    gl_Position = worldViewProjection * vec4(position, 1.0);
 }

@@ -1,11 +1,11 @@
 import type { Texture } from "core/Materials/Textures/texture";
-import type { Vector3 } from "core/Maths/math.vector";
+import { Vector3 , Matrix, Vector2 } from "core/Maths/math.vector";
 import type { Scene } from "core/scene";
 import type { AbstractMesh } from "./abstractMesh";
 import type { ThinTexture } from "core/Materials/Textures/thinTexture";
 import type { BaseTexture } from "core/Materials/Textures/baseTexture";
 import type { Nullable } from "core/types";
-import { Matrix, Vector2 } from "core/Maths/math.vector";
+
 import { Constants } from "core/Engines/constants";
 import { ShaderMaterial } from "core/Materials/shaderMaterial";
 import { RenderTargetTexture } from "core/Materials/Textures/renderTargetTexture";
@@ -18,6 +18,7 @@ import "../Shaders/meshUVSpaceRendererMasker.vertex";
 import "../Shaders/meshUVSpaceRendererMasker.fragment";
 
 import "../Shaders/meshUVSpaceRendererSeam.fragment";
+import "../Shaders/meshUVSpaceRendererSeam.vertex";
 
 import "../Shaders/meshUVSpaceRendererCombine.vertex";
 import "../Shaders/meshUVSpaceRendererCombine.fragment";
@@ -90,8 +91,8 @@ export class MeshUVSpaceRenderer {
                 },
                 {
                     attributes: ["position", "normal", "uv"],
-                    uniforms: ["world", "projMatrix", "texelSize"],
-                    samplers: ["textureSampler", "maskTexture"],
+                    uniforms: ["world", "decalTransform", "decalFade", "worldViewProjection"],
+                    samplers: ["textureSampler"],
                     needAlphaBlending: true,
                 }
             );
@@ -181,52 +182,75 @@ export class MeshUVSpaceRenderer {
     }
 
     // Method to use the mask texture to fix UV seams
-    public async renderTexture(texture: BaseTexture, position: Vector3, normal: Vector3, size: Vector3, angle = 0): void {
+    public async renderTexture(texture: BaseTexture, position: Vector3, rotation: Vector3, scale: Vector3, normal: Vector3, size: Vector3, angle: number): Promise<void> {
         // Ensure the mask texture is ready for seam fixing
-        //todo flag
-        await this._createMaskTexture();
+        // //todo flag
+        // await this._createMaskTexture();
 
-        this._createSeamTexture();
+        // this._createSeamTexture();
 
         // Create the diffuse render target texture if it doesn't exist
         if (!this.texture) {
             this._createDiffuseRTT();
         }
 
-        const plane = MeshBuilder.CreatePlane("image", {size: 1},  this._scene);
-        const pbr = new PBRMaterial("P", this._scene);
-        pbr.roughness = 1;
-        pbr.emissiveTexture = this._maskTexture;
-        pbr.emissiveIntensity = 1;
-        pbr.emissiveColor = new Color3(1, 1, 1);
-        pbr.albedoTexture = this._maskTexture;
-        plane.material = pbr;
-        pbr.disableLighting = true;
+        // const plane = MeshBuilder.CreatePlane("image", {size: 1},  this._scene);
+        // const pbr = new PBRMaterial("P", this._scene);
+        // pbr.roughness = 1;
+        // pbr.emissiveTexture = this._maskTexture;
+        // pbr.emissiveIntensity = 1;
+        // pbr.emissiveColor = new Color3(1, 1, 1);
+        // pbr.albedoTexture = this._maskTexture;
+        // plane.material = pbr;
+        // pbr.disableLighting = true;
 
-        const plane2 = MeshBuilder.CreatePlane("image", {size: 1},  this._scene);
-        const pbr2 = new PBRMaterial("P2", this._scene);
-        pbr2.roughness = 1;
-        pbr2.emissiveTexture = this._seamTexture;
-        pbr2.emissiveIntensity = 1;
-        pbr2.emissiveColor = new Color3(1, 1, 1);
-        pbr2.albedoTexture = this._seamTexture;
-        plane2.material = pbr2;
-        pbr2.disableLighting = true;
-        plane2.position.y -= 1;
+        // const plane2 = MeshBuilder.CreatePlane("image", {size: 1},  this._scene);
+        // const pbr2 = new PBRMaterial("P2", this._scene);
+        // pbr2.roughness = 1;
+        // pbr2.emissiveTexture = this._seamTexture;
+        // pbr2.emissiveIntensity = 1;
+        // pbr2.emissiveColor = new Color3(1, 1, 1);
+        // pbr2.albedoTexture = this._seamTexture;
+        // plane2.material = pbr2;
+        // pbr2.disableLighting = true;
+        // plane2.position.y -= 1;
 
         // Prepare the shader with the decal texture, mask texture, and necessary uniforms
         const shader = MeshUVSpaceRenderer._GetShader(this._scene);
         shader.setTexture("textureSampler", texture); // Decal texture
-        shader.setTexture("maskTexture", this._maskTexture); // Mask texture for seam fixing
-        shader.setTexture("seamTexture", this._seamTexture); // Mask texture for seam fixing
-        //todo use this
-        shader.setVector2("texelSize", new Vector2(1.0 / this._options.width, 1.0 / this._options.height));
+        const decalPosition = position; // Replace x, y, z with your values
+        const decalRotation = rotation; // Rotation in radians
+        const decalScale = scale; // Replace sx, sy, sz with your scale values
 
+        // Create transformation matrices for each component
+        const translationMatrix = Matrix.Translation(decalPosition.x, decalPosition.y, decalPosition.z);
+        const rotationMatrix = Matrix.RotationYawPitchRoll(decalRotation.y, decalRotation.x, decalRotation.z);
+        const scaleMatrix = Matrix.Scaling(decalScale.x, decalScale.y, decalScale.z);
+
+        // Combine the matrices
+        const decalTransform = scaleMatrix.multiply(rotationMatrix).multiply(translationMatrix);
+
+        // shader.setTexture("maskTexture", this._maskTexture); // Mask texture for seam fixing
+        // shader.setTexture("seamTexture", this._seamTexture); // Mask texture for seam fixing
+        //todo use this
+        const camera = this._scene.activeCamera;
+        // shader.setVector2("texelSize", new Vector2(1.0 / this._options.width, 1.0 / this._options.height));
+        if(camera) {
+            const worldViewProjectionMatrix = camera.getWorldMatrix().multiply(camera.getViewMatrix()).multiply(camera.getProjectionMatrix());
+            shader.setMatrix("worldViewProjection", worldViewProjectionMatrix);
+        }
         // Calculate and set the projection matrix
         const projectionMatrix = this._createProjectionMatrix(position, normal, size, angle);
-        shader.setMatrix("projMatrix", projectionMatrix);
-        // this.texture = this._maskTexture;
-        // Render the decal with the updated material that includes seam fix logic
+        // shader.setMatrix("projMatrix", projectionMatrix);
+        this._scene.registerBeforeRender(() => {
+            // Update the world matrix uniform
+            shader.setMatrix("world", this._mesh.getWorldMatrix());
+            // Set other uniforms as needed
+        });
+        shader.setMatrix("decalTransform", decalTransform);
+        shader.setMatrix("decalProjection", projectionMatrix);
+        shader.setFloat("decalFade", 0.5);
+
         if (MeshUVSpaceRenderer._IsRenderTargetTexture(this.texture)) {
             this.texture.render();
         }
@@ -265,9 +289,15 @@ export class MeshUVSpaceRenderer {
                 "maskTexture",
                 { width: this._options.width, height: this._options.height },
                 this._scene,
-                false, // No mipmaps for the mask texture
+                false,
                 true,
-                Constants.TEXTURETYPE_FLOAT
+                this._options.textureType,
+                false,
+                Constants.TEXTURE_BILINEAR_SAMPLINGMODE,
+                false,
+                false,
+                false,
+                Constants.TEXTUREFORMAT_RGB
             );
     
             // Set up the mask material
@@ -280,11 +310,12 @@ export class MeshUVSpaceRenderer {
                 },
                 {
                     attributes: ["position", "uv"],
-                    uniforms: ["worldViewProjection"]
+                    uniforms: ["worldViewProjection"],
+                    needAlphaBlending: true,
+                    needAlphaTesting: true
                 }
             );
 
-            this._mesh.material = this._mesh.material as PBRMaterial;
             maskMaterial.backFaceCulling = false;
     
             // Render the mesh with the mask material to the mask texture

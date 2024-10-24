@@ -1,5 +1,5 @@
 import type { Texture } from "core/Materials/Textures/texture";
-import type { Vector3 } from "core/Maths/math.vector";
+import { Vector2, Vector3 } from "core/Maths/math.vector";
 import type { Scene } from "core/scene";
 import type { AbstractMesh } from "./abstractMesh";
 import type { ThinTexture } from "core/Materials/Textures/thinTexture";
@@ -21,6 +21,8 @@ declare module "../scene" {
         _meshUVSpaceRendererShader: Nullable<ShaderMaterial>;
         /** @internal */
         _meshUVSpaceRendererMaskShader: Nullable<ShaderMaterial>;
+        /** @internal */
+        _meshUVSpaceRendererWarpShader: Nullable<ShaderMaterial>;
     }
 }
 
@@ -70,6 +72,42 @@ export class MeshUVSpaceRenderer {
     private _finalPostProcess: Nullable<PostProcess> = null;
     private _shadersLoaded = false;
     private _isDisposed = false;
+
+    private static _GetWarpShader(scene: Scene, shaderLanguage: ShaderLanguage): ShaderMaterial {
+        const shader = new ShaderMaterial(
+            "meshUVSpaceRendererWarpShader",
+            scene,
+            {
+                vertex: "meshUVSpaceRendererWarp",
+                fragment: "meshUVSpaceRendererWarp",
+            },
+            {
+                attributes: ["position", "normal"],
+                uniforms: [
+                    "world",
+                    "viewProjection",
+                    "decalPosition",
+                    "decalNormal",
+                    "decalTangent",
+                    "decalBinormal",
+                    "decalSize",
+                    "decalFalloff",
+                ],
+                samplers: ["decalSampler"],
+                needAlphaBlending: true,
+                shaderLanguage: shaderLanguage,
+            }
+        );
+        shader.backFaceCulling = false;
+        shader.alphaMode = Constants.ALPHA_COMBINE;
+    
+        scene.onDisposeObservable.add(() => {
+            shader.dispose();
+        });
+    
+        return shader;
+    }
+    
 
     private static _GetShader(scene: Scene, shaderLanguage: ShaderLanguage): ShaderMaterial {
         if (!scene._meshUVSpaceRendererShader) {
@@ -199,6 +237,8 @@ export class MeshUVSpaceRenderer {
                 import("../Shaders/meshUVSpaceRendererMasker.fragment"),
                 import("../Shaders/meshUVSpaceRendererFinaliser.vertex"),
                 import("../Shaders/meshUVSpaceRendererFinaliser.fragment"),
+                import("../Shaders/meshUVSpaceRendererWarp.vertex"),
+                import("../Shaders/meshUVSpaceRendererWarp.fragment"),
             ]);
         }
 
@@ -230,6 +270,20 @@ export class MeshUVSpaceRenderer {
         const postProcessIsReady = this._finalPostProcess?.isReady() ?? true;
 
         return textureIsReady && maskIsReady && postProcessIsReady;
+    }
+
+    public computeDecalBasis(decalNormal: Vector3): { tangent: Vector3; binormal: Vector3 } {
+        let up = Vector3.Up();
+    
+        // Avoid degenerate case when decalNormal is parallel to up vector
+        if (Math.abs(Vector3.Dot(decalNormal, up)) > 0.99) {
+            up = Vector3.Right();
+        }
+    
+        const tangent = Vector3.Cross(up, decalNormal).normalize();
+        const binormal = Vector3.Cross(decalNormal, tangent);
+    
+        return { tangent, binormal };
     }
 
     /**
@@ -268,6 +322,43 @@ export class MeshUVSpaceRenderer {
             // We needed the texture only once for the render() call above, so we can remove it from the shader.
             // It's important to do that, because this texture could be disposed by the user, meaning that shader.isReady() would return false as part of the this.texture.isReadyForRendering() call of isReady()
             shader.removeTexture("textureSampler");
+        }
+    }
+
+    // Modify the renderTexture method
+    public renderTextureWarp(
+        texture: BaseTexture,
+        position: Vector3,
+        normal: Vector3,
+        size: Vector3,
+        angle = 0,
+        checkIsReady = true
+    ): void {
+        if (checkIsReady && !this.isReady()) {
+            setTimeout(() => {
+                this.renderTexture(texture, position, normal, size, angle, checkIsReady);
+            }, 16);
+            return;
+        }
+
+        const shader = MeshUVSpaceRenderer._GetWarpShader(this._scene, this._shaderLanguage);
+
+        // Compute decal basis vectors
+        const { tangent: decalTangent, binormal: decalBinormal } = this.computeDecalBasis(normal);
+
+        // Set uniforms
+        shader.setTexture("decalSampler", texture);
+        shader.setVector3("decalPosition", position);
+        shader.setVector3("decalNormal", normal);
+        shader.setVector3("decalTangent", decalTangent);
+        shader.setVector3("decalBinormal", decalBinormal);
+        shader.setVector2("decalSize", new Vector2(size.x, size.y));
+        shader.setFloat("decalFalloff", 0.5); // Adjust as needed
+
+        // Render the mesh with the warp shader
+        if (this.texture && MeshUVSpaceRenderer._IsRenderTargetTexture(this.texture)) {
+            this.texture.render();
+            shader.dispose(); // Clean up after rendering
         }
     }
 
